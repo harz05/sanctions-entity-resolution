@@ -3,6 +3,17 @@ cells=[]
 def md(s): cells.append({"cell_type":"markdown","metadata":{},"source":s.strip("\n")})
 def code(s): cells.append({"cell_type":"code","metadata":{},"execution_count":None,"outputs":[],"source":s.strip("\n")})
 
+import os as _os
+_SRCDIR=_os.path.dirname(_os.path.abspath(__file__))
+def _lines(f,a,b):
+    return "\n".join(open(f"{_SRCDIR}/{f}").read().split("\n")[a-1:b])
+def codeview(title,parts):
+    """A markdown cell showing the exact source lines that the following stage runs."""
+    body=f"**The code that runs here.** {title}\n\n"
+    for f,a,b,note in parts:
+        body+=f"`src/{f}`, lines {a} to {b}"+(f" ({note})" if note else "")+":\n\n```python\n"+_lines(f,a,b)+"\n```\n\n"
+    md(body)
+
 md("""
 # Learned deferral for sanctions entity resolution: classical matchers, LLMs and human review
 
@@ -51,6 +62,8 @@ LLM's "mistakes" (`Occupancy` vs `Occupancy`) exposed it. `er_lib.sample` keeps 
 fields that could leak the label (`datasets`, `referents`, `first_seen`, `target`), de-duplicates unordered pairs and draws
 39k positive + 21k negative pairs with a fixed seed. Split 36k / 6k / 18k.
 """)
+codeview('Cleaning and sampling in `er_lib.py`. `SCHEMAS` is the list of entity types kept (the relational stubs fail this test), `strip` keeps only the `KEEP` properties (the provenance fields are not in it), `sample` streams the raw file once with reservoir sampling per class, `split` is a seeded 60 / 10 / 30 permutation.',[('er_lib.py', 9, 17, 'vocabulary and strip'), ('er_lib.py', 19, 55, 'sample'), ('er_lib.py', 169, 177, 'split')])
+codeview('The 34 pair features in `er_lib.py` (five count features are dropped later, leaving 29). Names are normalised, every name on side A is compared with every name on side B and the best score is kept.',[('er_lib.py', 60, 116, 'normalisation, name lists, helper extractors, feature names'), ('er_lib.py', 118, 158, 'pair_feats, one call per pair')])
 code("""
 print("entity schemas kept:",sorted(E.SCHEMAS))
 print(json.dumps(json.load(open(f"{DATA}/sample_stats.json")),indent=1))
@@ -68,6 +81,7 @@ md("""
 Model selection by 5-fold stratified CV on the training split; threshold tuned on validation; test touched once.
 Isotonic regression on the validation split turns the random-forest vote fraction into a calibrated posterior.
 """)
+codeview('The seven classifiers in `er_match.py`. `models()` holds every hyperparameter. The loop does 5-fold stratified cross-validation for out-of-fold probabilities, fits on the full training split (the SVM on a 12k subsample for speed), picks the F1-best threshold on validation, and fits the isotonic calibration on validation.',[('er_match.py', 14, 19, 'load features, drop the count features when NOCOUNTS=1'), ('er_match.py', 21, 39, 'the models, the metric block, the threshold search'), ('er_match.py', 41, 63, 'cross-validation, fit, threshold, isotonic calibration')])
 code("""
 %run $SRC/er_match.py
 """)
@@ -82,6 +96,7 @@ print("\\ntop RF features:",", ".join(f"{a} {b:.3f}" for a,b in m["rf_importance
 md("""
 ## 3. Rule baselines, label efficiency, calibration, feature importance, per-type errors
 """)
+codeview('Rule baselines and the learning curve in `er_extra.py`. Each rule is one feature and one threshold picked on validation. The learning curve trains the forest and logistic regression on random subsets of the training split of increasing size and scores on the full test split.',[('er_extra.py', 19, 33, 'rule baselines'), ('er_extra.py', 35, 49, 'learning curve')])
 code("""
 %run $SRC/er_extra.py
 """)
@@ -102,6 +117,7 @@ python er_lib.py llm --model Qwen/Qwen2.5-14B-Instruct-AWQ --which main
 python er_lib.py llm --model Qwen/Qwen2.5-7B-Instruct --which main --shots 4
 ```
 """)
+codeview('The LLM as a matcher in `er_lib.py`. `render` turns a record into labelled lines, `PROMPT` is the exact prompt, `llm` scores a list of pairs with vLLM at temperature 0 and reads P(yes) from the first-token log probabilities. This stage runs on the GPU (`python er_lib.py llm --model ... --which main`, 6 to 14 minutes per model) and the notebook loads its saved answers from `data/llm_*.jsonl`.',[('er_lib.py', 179, 194, 'render and the prompt'), ('er_lib.py', 196, 203, 'the four-shot block'), ('er_lib.py', 205, 236, 'scoring with vLLM')])
 code("""
 print(E.PROMPT.format(a="<record A>",b="<record B>"))
 from sklearn.metrics import f1_score,accuracy_score
@@ -122,6 +138,7 @@ fraction. Gates compared: confidence, learned error gate $\\hat P(\\text{matcher
 $\\hat P(\\text{expert right}\\wedge\\text{matcher wrong}\\mid x,p)$ (learning to defer), random and oracle. Two experts: human
 (assumed correct) and the LLM. Gates are trained on 12k training pairs with LLM answers, disjoint from calibration data and test.
 """)
+codeview("Gates and deferral curves in `er_gate.py`. The learned gates see the 29 features plus p, min(p,1-p) and the raw score, and are trained on 12k training pairs to predict the matcher's errors (`err`) or the pairs the LLM can fix (`gain`). `curve` is the deferral mechanic: rank by a score, replace the matcher's answer on the top fraction by the expert's answer, recompute F1.",[('er_gate.py', 19, 36, 'inputs, gate features, the two targets'), ('er_gate.py', 41, 54, 'the learned gates and the confidence gate'), ('er_gate.py', 56, 76, 'deferral curves for the confidence, random, oracle and learned gates, human and LLM experts')])
 code("""
 %run $SRC/er_gate.py rf Qwen2.5-7B-Instruct
 """)
@@ -138,6 +155,7 @@ show("deferral_curves_Qwen2.5-7B-Instruct.png",900);show("deferral_curves_Qwen2.
 md("""
 ## 6. The hard core: pairs that every system gets wrong
 """)
+codeview('The hard core in `er_core.py`: test pairs that the matcher and all three LLM runs get wrong.',[('er_core.py', 8, 31, '')])
 code("""
 %run $SRC/er_core.py
 print(open(f"{DATA}/core_examples.txt").read()[:3500])
@@ -146,6 +164,7 @@ print(open(f"{DATA}/core_examples.txt").read()[:3500])
 md("""
 ## 7. Robustness: feature ablation, cross-type generalisation, leakage checks, difficulty strata
 """)
+codeview('Feature-group ablation in `er_ablate.py`: a forest and a logistic regression per feature group. `all` against `no_counts` is the count-feature leakage check.',[('er_ablate.py', 13, 26, '')])
 code("""
 %run $SRC/er_ablate.py
 """)
@@ -165,6 +184,7 @@ md("""
 The matcher trained on the 36k training split is applied to every other entity pair in the raw file (none of them seen in
 training, validation or test). Needs the raw file at `ER_RAW`.
 """)
+codeview('The sampling-luck check in `er_fullpop.py`: the raw file is streamed again with the same filter, every pair not in the 60k sample is featurised, and the forest trained on the 36k training split (with the isotonic map from the 6k validation split) scores all of them. The confidence interval is a 200-draw bootstrap.',[('er_fullpop.py', 15, 46, 'stream, featurise, score'), ('er_fullpop.py', 53, 57, 'bootstrap confidence interval')])
 code("""
 %run $SRC/er_fullpop.py
 """)
@@ -176,6 +196,7 @@ The human expert above is perfect by construction. Here the reviewed labels are 
 reject region is recomputed for unequal costs of a missed match, a false match and a review (defer when c_d/c_FN < p < 1 - c_d/c_FP),
 and the LLM is combined with the matcher (weighted average, logistic stacker, LLM probability as a 30th feature) instead of replacing it on deferred pairs.
 """)
+codeview("Decision-theory extras in `er_decision.py`. (B) combines the matcher and the LLM instead of deferring. (C) flips the reviewer's answer with probability eps on the deferred pairs. (D) applies the three-way Bayes rule with costs c_fp = 1, c_fn in {1, 3, 10}, c_d in {0.05, 0.1, 0.2, 0.5} and compares the total cost with the best single threshold without a reject option.",[('er_decision.py', 39, 50, 'combination'), ('er_decision.py', 53, 67, 'noisy reviewer'), ('er_decision.py', 74, 85, 'asymmetric costs, the reject region is lo < p < hi')])
 code("""
 %run $SRC/er_decision.py Qwen2.5-7B-Instruct
 """)
@@ -196,6 +217,7 @@ python er_llm32.py cot     # 205 s, 1845 pairs
 python er_llm32.py think   # 450 s, 987 pairs
 ```
 """)
+codeview('The 32B expert in `er_llm32.py` and its evaluation in `er_llm32_eval.py`. The three modes differ in which pairs they score and how the model is sampled. The GPU run is `bash run32.sh` (32 + 4 + 8 minutes); the notebook loads its saved answers from `data/`.',[('er_llm32.py', 13, 16, 'model and the chain-of-thought instruction'), ('er_llm32.py', 26, 47, 'answer parsing and the three modes'), ('er_llm32_eval.py', 18, 28, 'the six expert files, confidence ranking, the hard core'), ('er_llm32_eval.py', 32, 53, 'per expert: alone, complementarity, deferral curve, the 5 percent breakdown, core recovery')])
 code("""
 %run $SRC/er_llm32_eval.py
 """)
